@@ -1,3 +1,8 @@
+## Llama2 from scratch
+
+This is a follow-along activity from Umar Jamil's excellent youtube video on the same
+> https://www.youtube.com/watch?v=oM4VmoabDAI
+
 ![alt text](images/architecture.png)
 
 ![alt text](images/encodings-meme.png)
