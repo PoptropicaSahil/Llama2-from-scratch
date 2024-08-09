@@ -132,6 +132,36 @@ class RMSNorm(nn.Module):
         return self.gamma * self._norm(x.float()).type_as(x)
     
 
+class EncoderBlock(nn.Module):
+
+    def __init__(self, args: ModelArgs):
+        super().__init__()
+
+        self.n_heads = args.n_heads
+        self.dim = args.dim
+        self.head_dim = self.dim // self.n_heads
+
+        self.attention = SelfAttention(args)
+        self.feed_forward = FeedForward(args)
+
+        # RMSNorm before self attention
+        self.attention_norm = RMSNorm(args.dim, eps=args.norm_eps)
+        # RMSNorm before feedforward (after self attention)
+        self.ffn_norm = RMSNorm(args.dim, eps=args.norm_eps)
+
+    def forward(self, x: torch.Tensor, start_pos: int, freqs_complex: torch.Tensor):
+        """
+        Args:
+            x (torch.Tensor): _description_
+            start_pos (int): We deal only with one token at a time, start_pos is its position
+            freqs_complex (torch.Tensor): _description_
+        """
+        # Note assert seq_len == 1 in forward pass of Transformers
+        # Refer to architecture.png 
+        # Shape: (B, seq_len, dim) + (B, seq_len, dim) -> (B, seq_len, dim)
+        h = x + self.attention.forward(self.attention_norm(x), start_pos, freqs_complex)
+        out = h + self.feed_forward(self.ffn_norm(h))
+        return out
 
 
 class Transformer(nn.Module):
