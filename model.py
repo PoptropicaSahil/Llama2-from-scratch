@@ -1,33 +1,10 @@
-from dataclasses import dataclass
-from typing import Optional
-
 import torch
 import torch.nn as nn
 
+from model_args import ModelArgs
+
 # import torch.nn.functional as F
 # import math
-
-
-@dataclass
-class ModelArgs:
-    dim: int = 4096
-    n_layers: int = 32
-    n_heads: int = 32  # num heads for Queries
-    n_kv_heads: Optional[int] = None  # num heads for K, V
-    vocab_size: int = -1  # will be set while loading tokenizer
-
-    # hidden dim of feedforward layer
-    # useful for grouped query attention
-    multiple_of: int = 256
-    ffn_dim_multiplier: Optional[float] = None
-
-    norm_eps: float = 1e-5
-
-    # for KV cache
-    max_batch_size: int = 32
-    max_seq_len: int = 2048
-
-    device: Optional[str] = None
 
 
 def precompute_theta_pos_frequencies(
@@ -70,6 +47,7 @@ def precompute_theta_pos_frequencies(
     freqs_complex = torch.polar(abs=torch.ones_like(freqs), angle=freqs)
     return freqs_complex
 
+
 def apply_rotary_embeddings(x: torch.Tensor, freqs_complex: torch.Tensor, device: str):
     """
 
@@ -85,11 +63,11 @@ def apply_rotary_embeddings(x: torch.Tensor, freqs_complex: torch.Tensor, device
 
     # Transformation 1
     # Shape: (B, seq_len, n_heads, head_dim) -> (B, seq_len, n_heads, head_dim/2)
-    # head_dim/2 because we are pairing conscecutive 
+    # head_dim/2 because we are pairing conscecutive
     x = x.float().reshape(*x.shape[:-1], -1, 2)
-    
+
     # Transformation 2
-    x_complex = torch.view_as_complex(x) 
+    x_complex = torch.view_as_complex(x)
 
     # Shape: (seq_len, head_dim/2) -> (1, seq_len, head_dim/2) -> (1, seq_len, 1, head_dim/2)
     # Equivalent to B = 1, n_heads = 1
@@ -110,9 +88,8 @@ def apply_rotary_embeddings(x: torch.Tensor, freqs_complex: torch.Tensor, device
 
     return x_out.type_as(x).to(device)
 
-    
-class RMSNorm(nn.Module):
 
+class RMSNorm(nn.Module):
     def __init__(self, dim: int, eps: float = 1e-6):
         super().__init__()
         self.eps = eps
@@ -130,10 +107,73 @@ class RMSNorm(nn.Module):
     def forward(self, x: torch.Tensor):
         # Shape: (dim) * (B, seq_len, dim) -> (B, seq_len, dim)
         return self.gamma * self._norm(x.float()).type_as(x)
-    
+
+
+class SelfAttention(nn.Module):
+    """This code does not take care of GPU parallelisation"""
+
+    def __init__(self, args: ModelArgs):
+        super().__init__()
+        # defaults to multi-head attention if n_heads_kv is not set
+        # refer to images/grouped-mqa.png
+
+        # Shows number of heads for keys and values
+        self.n_heads_kv = (
+            args.n_heads_kv if args.n_heads_kv is not None else args.n_heads
+        )
+        # Shows number of heads for queries
+        self.n_heads_q = args.n_heads
+        # Shows how many times the HEADS of keys and values should be repeated to match the number of heads in queries
+        self.n_rep = self.n_heads_q // self.n_heads_kv
+        # Shows dimension of each head
+        self.head_dim = args.dim // args.n_heads
+
+        # The Weight matrices
+        # Shape almost equivalent to (dim, dim)
+        # but to account for multiple heads we write as (dim, head_dim*n_heads)
+        self.wq = nn.Linear(args.dim, self.head_dim * args.n_heads, bias=False)
+        self.wk = nn.Linear(args.dim, self.head_dim * args.n_heads, bias=False)
+        self.wv = nn.Linear(args.dim, self.head_dim * args.n_heads, bias=False)
+        self.wo = nn.Linear(self.head_dim * args.n_heads, args.dim, bias=False)
+
+        # Initialise KV caches
+        # Just have the batch size dimention extra here, otherwise usual only
+        self.cache_k = torch.zeros(
+            (args.max_batch_size, args.max_seq_len, self.n_heads_kv, self.head_dim)
+        )
+        self.cache_v = torch.zeros(
+            (args.max_batch_size, args.max_seq_len, self.n_heads_kv, self.head_dim)
+        )
+
+    def forward(self, x: torch.Tensor, start_pos: int, freqs_complex: torch.Tensor):
+        batch_size, seq_len, _ = x.shape # (B, 1, dim)
+
+        # Apply Wq, Wk and Wv matrices to queries, keys and values
+        # No change in shape here
+        # (B, 1, dim) -> (B, 1, n_heads_q * head_dim)
+        xq = self.wq(x)
+
+        # May result in shape change since n_heads_kv may be smaller than n_heads_q
+        # (B, 1, dim) -> (B, 1, n_heads_kv * head_dim)
+        xk = self.wk(x)
+        xv = self.wv(x)
+
+        # Explicitly divide last dimension into n_heads_(q/k/v) and head_dim
+        # (B, 1, n_heads_q * head_dim) -> (B, 1, n_heads_q, head_dim)
+        xq = xq.view(batch_size, seq_len, self.n_heads_q, self.head_dim)
+        # (B, 1, n_heads_kv * head_dim) -> (B, 1, n_heads_kv, head_dim)
+        xk = xk.view(batch_size, seq_len, self.n_heads_kv, self.head_dim)
+        xv = xv.view(batch_size, seq_len, self.n_heads_kv, self.head_dim)
+
+        # Apply rotary position encodings only to xq and xk
+        # Does not change the size of tensor since x_out = x_out.reshape(*x.shape)
+        # device = x.device!!
+        xq = apply_rotary_embeddings(xq, freqs_complex=freqs_complex, device=x.device)
+        xk = apply_rotary_embeddings(xk, freqs_complex=freqs_complex, device=x.device)
+
+
 
 class EncoderBlock(nn.Module):
-
     def __init__(self, args: ModelArgs):
         super().__init__()
 
@@ -157,7 +197,7 @@ class EncoderBlock(nn.Module):
             freqs_complex (torch.Tensor): _description_
         """
         # Note assert seq_len == 1 in forward pass of Transformers
-        # Refer to architecture.png 
+        # Refer to architecture.png
         # Shape: (B, seq_len, dim) + (B, seq_len, dim) -> (B, seq_len, dim)
         h = x + self.attention.forward(self.attention_norm(x), start_pos, freqs_complex)
         out = h + self.feed_forward(self.ffn_norm(h))
