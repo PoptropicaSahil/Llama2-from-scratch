@@ -56,3 +56,7 @@ Solution A: Optimise memory access, but loose some performace - **Multi query at
 Solution B: **Grouped Multi Query Attention**
 Multi head is best performance, Multi query is fastest
 ![alt text](images/grouped-mqa.png)
+
+
+### SwiGLU
+![alt text](images/swiglu.png)

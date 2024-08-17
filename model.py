@@ -3,8 +3,8 @@ import torch.nn as nn
 
 from model_args import ModelArgs
 
-# import torch.nn.functional as F
-# import math
+import torch.nn.functional as F
+import math
 
 
 def precompute_theta_pos_frequencies(
@@ -89,6 +89,20 @@ def apply_rotary_embeddings(x: torch.Tensor, freqs_complex: torch.Tensor, device
     return x_out.type_as(x).to(device)
 
 
+def repeat_kv(x: torch.Tensor, n_rep: int) -> torch.Tensor:
+    batch_size, seq_len, n_kv_heads, head_dim = x.shape
+    if n_rep == 1:
+        return x
+    else:
+        return (
+            # (B, seq, N_kv_heads, 1, head_dim)
+            x[:, :, :, None, :] # We add a dimension
+            .expand(batch_size, seq_len, n_kv_heads, n_rep, head_dim) # expand it n_rep times
+            .reshape(batch_size, seq_len, n_kv_heads * n_rep, head_dim) # flatten that dimension
+        )
+
+
+
 class RMSNorm(nn.Module):
     def __init__(self, dim: int, eps: float = 1e-6):
         super().__init__()
@@ -110,7 +124,10 @@ class RMSNorm(nn.Module):
 
 
 class SelfAttention(nn.Module):
-    """This code does not take care of GPU parallelisation"""
+    """
+    This code does not take care of GPU parallelisation
+    The code is only for inferencing!
+    """
 
     def __init__(self, args: ModelArgs):
         super().__init__()
@@ -138,6 +155,7 @@ class SelfAttention(nn.Module):
 
         # Initialise KV caches
         # Just have the batch size dimention extra here, otherwise usual only
+        # QUESTION: Should it not be (B, seq_len, n_heads_kv, dim/n_heads_kv)
         self.cache_k = torch.zeros(
             (args.max_batch_size, args.max_seq_len, self.n_heads_kv, self.head_dim)
         )
@@ -146,7 +164,9 @@ class SelfAttention(nn.Module):
         )
 
     def forward(self, x: torch.Tensor, start_pos: int, freqs_complex: torch.Tensor):
-        batch_size, seq_len, _ = x.shape # (B, 1, dim)
+        batch_size, seq_len, _ = x.shape  # (B, 1, dim)
+        # x is only the latest token from previous pass
+        # Output of this forward is also (B, 1, dim)
 
         # Apply Wq, Wk and Wv matrices to queries, keys and values
         # No change in shape here
@@ -168,8 +188,77 @@ class SelfAttention(nn.Module):
         # Apply rotary position encodings only to xq and xk
         # Does not change the size of tensor since x_out = x_out.reshape(*x.shape)
         # device = x.device!!
+        # RoPE not applied to the values
         xq = apply_rotary_embeddings(xq, freqs_complex=freqs_complex, device=x.device)
         xk = apply_rotary_embeddings(xk, freqs_complex=freqs_complex, device=x.device)
+
+        # Apply KV cache
+        # Query will be single token (x)
+
+        # Replace the entry in the cache with THIS token (for every batch)
+        # Like putting in the cache (remember it is initialised with zeros)
+        self.cache_k[:batch_size, start_pos : start_pos + seq_len] = xk
+        self.cache_v[:batch_size, start_pos : start_pos + seq_len] = xv
+
+        # Retreive all the cached keys and values so far
+        # remember we need everything upto this point from the cache (matrix) for upcoming multiplications
+        # (B, seq_len_kv, n_heads_kv, head_dim)
+        keys = self.cache_k[:batch_size, : start_pos + seq_len]
+        values = self.cache_v[:batch_size, : start_pos + seq_len]
+
+        # Repeat the heads of the K and V to match number of heads of Q
+        keys = repeat_kv(keys, self.n_rep)
+        values = repeat_kv(values, self.n_rep)
+
+        # We are going to split the embedding over the multiple heads
+        # (B, 1, n_heads_q, head_dim) -> (B, n_heads_q, 1, head_dim)
+        xq = xq.transpose(1,2)
+        keys = keys.transpose(1,2)
+        values = values.transpose(1,2)
+
+        # attention
+        # (B, n_heads_q, 1, head_dim) @ (B, n_heads_q, head_dim, seq_len_kv) -> (B, n_heads_q, 1, seq_len_kv)
+        scores = torch.matmul(xq, keys.transpose(2,3)) / math.sqrt(self.head_dim)
+        scores = F.softmax(scores.float(), dim=1).type_as(xq)
+
+        # (B, n_heads_q, 1, seq_len_kv) @ (B, n_heads_q, seq_len_kv, head_dim) -> (B, n_heads_q, 1, head_dim)
+        output = torch.matmul(scores, values)
+
+        # split attention across heads
+        # (B, n_heads_q, 1, head_dim) -> (B, 1, n_heads_q, head_dim) -> (B, 1, dim)
+        output = output.transpose(1, 2).contiguous().view(batch_size, seq_len, -1)
+        
+        # (B, 1, dim) -> (B, 1, dim)
+        output = self.wo(output)
+
+        return output
+
+
+class FeedForward(nn.Module):
+
+    def __init__(self, args: ModelArgs):
+        super().__init__()
+
+        hidden_dim = 4 * args.dim # convention
+        hidden_dim = int(2 * hidden_dim / 3) # convention
+        if args.ffn_dim_multiplier is not None:
+            hidden_dim = int(args.ffn_dim_multiplier * hidden_dim)
+
+        # Round the hidden_dim to nearest multiple of multiple_of parameter (model param)
+        hidden = args.multiple_of * ((hidden_dim + args.multiple_of - 1) // args.multiple_of)
+
+        self.w1 = nn.Linear(args.dim, hidden_dim, bias=False)
+        self.w2 = nn.Linear(hidden_dim, args.dim, bias=False)
+        self.w3 = nn.Linear(args.dim, hidden_dim, bias=False)
+
+    def forward(self, x: torch.Tensor):
+        swish = F.silu(self.w1(x))
+        x_V = self.w3(x)
+        x = swish * x_V
+        x = self.w2(x)
+        return x
+
+
 
 
 
