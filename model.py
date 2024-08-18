@@ -245,7 +245,7 @@ class FeedForward(nn.Module):
             hidden_dim = int(args.ffn_dim_multiplier * hidden_dim)
 
         # Round the hidden_dim to nearest multiple of multiple_of parameter (model param)
-        hidden = args.multiple_of * ((hidden_dim + args.multiple_of - 1) // args.multiple_of)
+        hidden_dim = args.multiple_of * ((hidden_dim + args.multiple_of - 1) // args.multiple_of)
 
         self.w1 = nn.Linear(args.dim, hidden_dim, bias=False)
         self.w2 = nn.Linear(hidden_dim, args.dim, bias=False)
