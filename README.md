@@ -60,3 +60,36 @@ Multi head is best performance, Multi query is fastest
 
 ### SwiGLU
 ![alt text](images/swiglu.png)
+
+### Logits
+![alt text](images/logits.png)
+
+### Inference strategies
+**Greedy** --> choose the one with highest probability at each time step --> append it to the input and then choose the next token similarly. *Performs poorly*
+
+**Beam Search (with k)** --> At every step, we keep alive the top `k` paths and all others are killed --> increases inference time. *Performs better than greedy*
+![alt text](images/beam-search-1.png)
+![alt text](images/beam-search-2.png)
+
+**Temperature**
+![alt text](images/temperature.png)
+Without temperature, highest logit gets high probability. After temperature (logits divided by LOW Temp), values become higher - softmax amplifies the diferences - higher probability of top token - CONFIDENT Model. \
+HIGH Temp - less CONFIDENT
+
+**Random Sampling**
+![alt text](images/random-inf.png)
+
+**Top K**
+![alt text](images/top-k.png)
+Good but still possible a bad token shows up in the top K. We want to avoid this *but still want to have some randomness*
+
+![alt text](images/top-k-2.png)
+
+**Top P -- Used in LLaMA**
+Solves problem of top K by considering a cutoff on the cumulative probabilty also.
+![alt text](images/top-p.png)
+
+When many tokens have similar probability, we choose more tokens (high cumulative probability achieved later)
+When some tokens have high, we cutoff at less tokens only (high cumulative probability achieved earlier)
+
+![alt text](images/top-p-2.png)
