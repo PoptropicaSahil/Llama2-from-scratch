@@ -163,6 +163,8 @@ class SelfAttention(nn.Module):
         # Shows dimension of each head
         self.head_dim = args.dim // args.n_heads
 
+        # QUESTION: Should we not have head_dim_kv (B, seq_len, n_heads_kv, dim/n_heads_kv)
+
         # The Weight matrices
         # Shape almost equivalent to (dim, dim)
         # but to account for multiple heads we write as (dim, head_dim*n_heads)
