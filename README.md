@@ -3,6 +3,12 @@
 This is a follow-along activity from Umar Jamil's excellent youtube video on the same
 > https://www.youtube.com/watch?v=oM4VmoabDAI
 
+### Please check the **flow-digram.png** for a complete visual description. It is recommended to download the file for ease. 
+![alt text](flow-diagram.png)
+
+
+## LLaMA
+
 ![alt text](images/architecture.png)
 
 ![alt text](images/encodings-meme.png)
