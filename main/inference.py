@@ -10,8 +10,8 @@ from tqdm import tqdm
 # import tqdm as tqdm
 
 
-from model import Transformer
-from model_args import ModelArgs
+from main.model import Transformer
+from main.model_args import ModelArgs
 
 
 class LLaMA:
@@ -226,8 +226,8 @@ if __name__ == "__main__":
 
     # LLaMA class's build method returns object of type LLaMA only!
     model = LLaMA.build(
-        checkpoints_dir="llama-2-7b",
-        tokenizer_path="tokenizer.model",
+        checkpoints_dir="../llama-2-7b",
+        tokenizer_path="../tokenizer.model",
         load_model=True,
         max_seq_len=1024,
         max_batch_size=3,
