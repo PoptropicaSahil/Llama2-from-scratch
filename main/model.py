@@ -62,11 +62,20 @@ def apply_rotary_embeddings(x: torch.Tensor, freqs_complex: torch.Tensor, device
     # x will be passed to multi-head attention
 
     # Transformation 1
-    # Shape: (B, seq_len, n_heads, head_dim) -> (B, seq_len, n_heads, head_dim/2)
+    # Shape: (B, seq_len, n_heads, head_dim) -> (B, seq_len, n_heads, head_dim/2, 2)
     # head_dim/2 because we are pairing conscecutive
+    
+    # Suppose initial shape is (32, 128, 16, 64)
+    # After the reshape:
+    # *x.shape[:-1] gives us (32, 128, 16) i.e. unpacking upto last dim
+    # The last dimension (64) is reshaped into (-1, 2)
+    # 64 into (-1, 2) gives (32, 2)
+    # Final result is (32, 128, 16 ,32, 2)
     x = x.float().reshape(*x.shape[:-1], -1, 2)
 
     # Transformation 2
+    # Shape: (B, seq_len, n_heads, head_dim/2, 2) -> (B, seq_len, n_heads, head_dim/2)
+    # Real part and imaginary part
     x_complex = torch.view_as_complex(x)
 
     # Shape: (seq_len, head_dim/2) -> (1, seq_len, head_dim/2) -> (1, seq_len, 1, head_dim/2)
